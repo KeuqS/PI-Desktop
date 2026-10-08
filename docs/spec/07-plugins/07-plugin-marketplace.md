@@ -563,25 +563,12 @@ the catalog says so. A v1 catalog's boolean `verified` maps to `verified` /
 `community` unchanged, because a v1 catalog is only writable by marketplace
 maintainers.
 
-## 9. Private sources (enterprise-facing)
+## 9. Private sources (future enterprise support)
 
-Supports configuration:
-
-```json
-{
- "marketProviders": [
- {
- "id": "official",
- "url": "https://market.example.com"
- },
- {
- "id": "corp",
- "url": "https://plugins.company.local",
- "tokenEnv": "PI_DESKTOP_MARKET_TOKEN"
- }
- ]
-}
-```
+The shipped client does not expose or persist a private catalog source. The
+`PI_DESKTOP_PLUGIN_MARKET_URL` override is limited to local development and
+tests; it is not a product setting. Enterprise source support requires a
+future product decision and explicit security and authorization design.
 
 ## 10. Remote API draft (HTTP)
 
