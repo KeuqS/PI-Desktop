@@ -13,7 +13,8 @@
 # exported as a system-Electron repackaging asset, and all outputs — with their
 # electron-updater latest*.yml feeds — are published to the GitHub Release
 # (D126/D285/D364/D603). macOS tag artifacts are Developer ID-signed, notarized, and
-# stapled before upload (D450 / ADR 0289).
+# stapled before upload (D450 / ADR 0289); Windows installers are Authenticode-signed
+# by SignPath before upload (D654 / ADR 0325).
 #
 # It also builds the headless `pi-host` bundle for both Linux architectures the
 # desktop publishes and publishes each as
@@ -31,6 +32,12 @@ on:
     inputs:
       sign_macos:
         description: 'Sign and notarize macOS artifacts (default true; set false only for unsigned debug artifacts)'
+        required: false
+        default: true
+        type: boolean
+
+      sign_windows:
+        description: 'Sign Windows installers with SignPath (default true; set false only for unsigned debug artifacts)'
         required: false
         default: true
         type: boolean
@@ -88,6 +95,12 @@ jobs:
     env:
       # Tag pushes always sign. workflow_dispatch signs unless explicitly disabled.
       MACOS_SIGN_RELEASE: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos == true }}
+      WINDOWS_SIGN_RELEASE: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_windows == true }}
+    # The SignPath connector reads this workflow's job metadata and downloads
+    # the uploaded artifact over the GitHub API (D654 / ADR 0325).
+    permissions:
+      actions: read
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -193,6 +206,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Require Windows signing configuration
+        # Fails before the ~30-minute packaging phase instead of after it when
+        # the SignPath settings are missing.
+        if: matrix.platform == 'windows' && env.WINDOWS_SIGN_RELEASE == 'true'
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "${SIGNPATH_API_TOKEN}" ]] || missing+=(secrets.SIGNPATH_API_TOKEN)
+          [[ -n "${SIGNPATH_ORGANIZATION_ID}" ]] || missing+=(vars.SIGNPATH_ORGANIZATION_ID)
+          [[ -n "${SIGNPATH_PROJECT_SLUG}" ]] || missing+=(vars.SIGNPATH_PROJECT_SLUG)
+          [[ -n "${SIGNPATH_SIGNING_POLICY_SLUG}" ]] || missing+=(vars.SIGNPATH_SIGNING_POLICY_SLUG)
+          [[ -n "${SIGNPATH_ARTIFACT_CONFIGURATION_SLUG}" ]] || missing+=(vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG)
+          if ((${#missing[@]} > 0)); then
+            echo "::error::Missing GitHub Actions settings for Windows code signing: ${missing[*]}"
+            echo "::error::Add them under Settings -> Secrets and variables -> Actions. See docs/spec/06-delivery/06-release-runbook.md section 4.8."
+            exit 1
+          fi
 
       - name: Prepare package inputs
         run: |
@@ -386,6 +423,74 @@ jobs:
       - name: Disambiguate macOS update metadata
         if: matrix.platform == 'macos'
         run: mv apps/desktop/release/latest-mac.yml apps/desktop/release/latest-mac-${{ matrix.arch }}.yml
+
+      # --- Windows code signing (SignPath, D654 / ADR 0325) -------------------
+      # SignPath signs a GitHub workflow artifact: the unsigned executables are
+      # uploaded as one archive, the connector verifies the build, applies
+      # apps/desktop/build/signpath/windows-release-artifacts.xml, and the
+      # signed files are extracted back over the unsigned ones.
+      - name: Resolve the Windows release version
+        if: matrix.platform == 'windows' && env.WINDOWS_SIGN_RELEASE == 'true'
+        id: windows-release-version
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Signing the Windows artifacts of PI-Desktop $VERSION"
+
+      - name: Upload unsigned Windows artifacts for signing
+        # SignPath signs what is stored as a GitHub workflow artifact, so the
+        # three artifacts go up as one archive first. Their paths keep the file
+        # names at the archive root, which is what the artifact configuration
+        # matches. The name carries the run attempt because a re-run of this job
+        # cannot reuse an artifact name the first attempt already created.
+        if: matrix.platform == 'windows' && env.WINDOWS_SIGN_RELEASE == 'true'
+        id: upload-unsigned-windows
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            apps/desktop/release/PI-Desktop-Setup-*.exe
+            apps/desktop/release/PI-Desktop-Portable-*.exe
+            apps/desktop/release/PI-Desktop-Portable-*.zip
+
+      - name: Submit the SignPath signing request
+        if: matrix.platform == 'windows' && env.WINDOWS_SIGN_RELEASE == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-windows.outputs.artifact-id }}
+          wait-for-completion: true
+          # Three artifacts (~380 MB) plus policy evaluation; 30 minutes bound a
+          # stalled connector inside the 60-minute job budget.
+          wait-for-completion-timeout-in-seconds: '1800'
+          output-artifact-directory: apps/desktop/release
+          # Pins the artifact names in the artifact configuration to the version
+          # this lane built, the same value the tag check above compares.
+          parameters: |
+            version: "${{ steps.windows-release-version.outputs.version }}"
+
+      - name: Verify signed Windows artifacts
+        if: matrix.platform == 'windows' && env.WINDOWS_SIGN_RELEASE == 'true'
+        run: |
+          set -euo pipefail
+          powershell -NoProfile -ExecutionPolicy Bypass \
+            -File scripts/verify-windows-release-signing.ps1 \
+            -ReleaseDirectory apps/desktop/release \
+            -Version "${{ steps.windows-release-version.outputs.version }}" \
+            -ExpectedPublisher "${{ vars.SIGNPATH_EXPECTED_PUBLISHER || 'SignPath Foundation' }}"
+
+      - name: Refresh the Windows updater feed
+        # Signing rewrote the installer bytes, so latest.yml and the installer's
+        # block map must describe the signed file before either is published.
+        if: matrix.platform == 'windows' && env.WINDOWS_SIGN_RELEASE == 'true'
+        run: node scripts/refresh-windows-update-feed.mjs apps/desktop/release
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

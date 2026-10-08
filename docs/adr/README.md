@@ -366,3 +366,4 @@ Each ADR includes:
 | 0322 | [Plugin providers appear in Add Service](0322-plugin-providers-in-add-service.md) | Accepted for implementation (D650; amends ADR 0259) |
 | 0323 | [Make Session Title Generation a Standalone Plugin](0323-plugin-owned-session-titles.md) | Accepted (D652; supersedes ADR 0186) |
 | 0324 | [Make Composer Prompt Enhancement an Optional Plugin](0324-plugin-owned-composer-prompt-enhancement.md) | Accepted (D653; supersedes ADR 0121) |
+| 0325 | [Signed Windows GitHub Releases through SignPath](0325-signed-windows-github-releases.md) | Accepted (D654; amends ADR 0022 / ADR 0197) |

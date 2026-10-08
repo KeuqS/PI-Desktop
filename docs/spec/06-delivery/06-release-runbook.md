@@ -2,7 +2,8 @@
 
 > Scope: D126/D285/D603 tag artifacts for macOS arm64 and Intel x64, Windows x64,
 > and Linux x64 and arm64, including the Linux system-Electron ASAR assets;
-> macOS signing/notarization remains the detailed qualification lane below.
+> macOS signing/notarization and Windows SignPath signing are the detailed
+> qualification lanes below.
 > Cross-references: [milestones](01-mvp-milestones.md) · [process model](../03-runtime/07-process-model.md) · [security](../05-security/01-security.md)
 
 ## 1. Build lanes
@@ -56,6 +57,11 @@ when macOS `iconutil` is available, without overwriting the canonical source.
      notarization (`APPLE_TEAM_ID` must be `DUV63RKYTW`)
 3. Rust toolchain and pnpm workspace installed. The Rust toolchain must run on
    the native macOS runner: arm64 for Apple Silicon or x86_64 for Intel.
+4. A SignPath organization with a linked **GitHub.com** trusted build system, a
+   project, a signing policy, the artifact configuration from
+   `apps/desktop/build/signpath/windows-release-artifacts.xml`, and an API token
+   with submitter permission. The Actions secrets and variables are listed in
+   section 4.8.
 
 ## 3. What the build ships
 
@@ -401,6 +407,99 @@ therefore needs the `mac.sign` replacement hook, which is a rewrite rather than
 a configuration switch, so the lane keeps the pinned signer and the diagnostics
 above.
 
+### 4.8 Windows code signing (SignPath)
+
+Windows tag artifacts are Authenticode-signed before upload (D654 / ADR 0325).
+Signing runs through SignPath's GitHub connector, which signs an artifact that a
+GitHub-hosted workflow produced: it verifies the build origin, applies an
+artifact configuration, and returns the signed files. Every job of this workflow
+runs on a GitHub-hosted runner, which is what the connector requires.
+
+SignPath setup (once per organization, before the first signed release):
+
+1. Add the predefined **GitHub.com** trusted build system to the SignPath
+   organization and link it to the PI-Desktop project. The connector is bound to
+   it, and the signing policy requires trusted build system verification, so a
+   request without it is rejected. On an OSS subscription the *Add predefined*
+   page returns 403 even for a global administrator, so an organization that
+   does not list GitHub.com yet has to request it from SignPath support.
+2. Install the [SignPath GitHub App](https://github.com/apps/signpath) for the
+   repository, so the connector can read build metadata and audit-log entries.
+3. Create the project (`PI-Desktop`), its signing policy (`release-signing`), and
+   an artifact configuration named `windows-release-artifacts` whose content is
+   `apps/desktop/build/signpath/windows-release-artifacts.xml`, pasted through
+   **Project → Artifact Configurations → Add → Custom**. Paste the file
+   unchanged, so the copy SignPath applies stays identical to the reviewed copy
+   in the repository.
+4. Make sure the signing policy is not `INVALID`. A policy whose certificate is
+   still `CSR PENDING` cannot sign, and every signing request fails while its
+   status is invalid; nothing in the workflow can work around that.
+5. Create the API token for the **CI user** that the signing policy lists as a
+   submitter (this organization ships the CI user `CI builds`). A token of an
+   interactive user is rejected even when that user administers the
+   organization.
+
+The artifact configuration's root element is a `<zip-file>`, because
+`actions/upload-artifact` stores a workflow artifact as a ZIP archive; every
+element below it therefore names a file at the root of that archive:
+
+| Artifact | Signed content |
+|---|---|
+| `PI-Desktop-Setup-<version>.exe` | The NSIS installer, which is also the in-app update package |
+| `PI-Desktop-Portable-<version>.exe` | The self-extracting portable executable kept for single-executable environments |
+| `PI-Desktop-Portable-<version>.zip` | `PI-Desktop.exe` and `resources/bin/pi-desktop-host-core.exe` inside the archive |
+
+The lane is gated by `sign_windows`: it is on for every tag push, and
+`workflow_dispatch` may disable it with `sign_windows: false` for unsigned debug
+artifacts (those runs never reach the release job). Its steps are:
+
+| Step | What it does |
+|---|---|
+| Require Windows signing configuration | Fails before packaging when one of the settings below is missing |
+| Resolve the Windows release version | Reads `apps/desktop/package.json` for the artifact configuration's `version` parameter |
+| Upload unsigned Windows artifacts for signing | Uploads the three unsigned artifacts as one GitHub artifact named `windows-unsigned-<run id>-<run attempt>`; it stays in the run as the record of what was submitted |
+| Submit the SignPath signing request | Signs that artifact and extracts the signed files back into `apps/desktop/release`; waits up to 30 minutes |
+| Verify signed Windows artifacts | `scripts/verify-windows-release-signing.ps1` requires a valid signature on all four executables |
+| Refresh the Windows updater feed | `scripts/refresh-windows-update-feed.mjs` rewrites `latest.yml` and the installer's block map for the signed bytes |
+
+These settings live under GitHub → repository `vastsa/PI-Desktop` → Settings →
+Secrets and variables → Actions:
+
+| Setting | Kind | Value |
+|---|---|---|
+| `SIGNPATH_API_TOKEN` | Secret | API token of the CI user that the signing policy lists as a submitter |
+| `SIGNPATH_ORGANIZATION_ID` | Variable | SignPath organization ID |
+| `SIGNPATH_PROJECT_SLUG` | Variable | SignPath project slug, `PI-Desktop`: slugs are case-sensitive |
+| `SIGNPATH_SIGNING_POLICY_SLUG` | Variable | SignPath signing policy slug, for example `release-signing` |
+| `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` | Variable | Slug of the artifact configuration uploaded in step 3 |
+| `SIGNPATH_EXPECTED_PUBLISHER` | Variable, optional | Certificate common name every signature must carry; defaults to `SignPath Foundation` |
+
+Two SignPath-side rules shape the artifact configuration and the lane:
+
+- The subscription enforces its own signature watermark, so
+  `<authenticode-sign>` in the artifact configuration carries no `description`
+  or `description-url` attribute; SignPath rejects a configuration that tries to
+  override the watermark.
+- A dry run can use the test certificate and the `test-signing` policy.
+  `test-signing` stays valid before the release certificate is issued and does
+  not itself require trusted build system verification, but the connector still
+  needs the project's GitHub.com link, so expect the first dry run to fail at
+  the submission step until SignPath adds it. The test certificate signs as
+  `Test certificate for 'PI-Desktop [OSS]'`, so `SIGNPATH_EXPECTED_PUBLISHER`
+  has to carry that common name for the run to pass signature verification.
+
+The lane stops instead of publishing when:
+
+- Signing changed the installer, so the `latest.yml` `sha512` and the
+  `PI-Desktop-Setup-<version>.exe.blockmap` describe bytes that no longer exist.
+  electron-updater verifies the feed's `sha512` before it starts an update
+  installer and rebuilds a differential download from the block map, so both are
+  refreshed from the signed file. A refresh that changes no digest fails, because
+  it means the request did not replace the artifacts.
+- The signature check fails an unsigned artifact, a signature from another
+  certificate, a missing artifact, or a portable ZIP that lost one of its signed
+  executables.
+
 ## 5. Verification gates
 
 Unsigned debug artifacts (`workflow_dispatch` with `sign_macos: false`) are
@@ -584,10 +683,10 @@ gets the correct updater distribution marker.
 
 The macOS packages include `bin/pi-desktop-host-core` built for their runner
 architecture; the Linux packages do the same on their native x64 and arm64
-runners; Windows includes `bin/pi-desktop-host-core.exe`. Signing, rollback,
-and installer upgrade
-qualification remain release hardening work; publication is active under
-D126/D285/D603.
+runners; Windows includes `bin/pi-desktop-host-core.exe`. macOS signing and
+notarization (D450 / ADR 0289) and Windows SignPath signing (D654 / ADR 0325)
+run before upload; rollback, staged rollout, and installer upgrade qualification
+remain release hardening work. Publication is active under D126/D285/D603.
 
 Native-runner output matrix:
 
@@ -650,3 +749,12 @@ Shell smoke on each native runner:
 - Rollback, staged rollout, and prerelease channel policy remain open release
   work. Existing unsigned macOS installs may need one manual signed DMG before
   in-app updates succeed.
+- Authenticode signing covers the Windows installers, not the payload inside the
+  NSIS installer. electron-builder packs `PI-Desktop.exe` into the installer
+  before the signing request runs, so the installed application executable stays
+  unsigned; the copies inside the portable ZIP are signed, because the artifact
+  configuration signs them within that archive. Signing the packed application
+  needs an unpack-sign-repack lane instead.
+- The SignPath GitHub connector signs artifacts of a GitHub-hosted workflow run
+  only, so no local or offline packaging run can produce signed Windows
+  installers.

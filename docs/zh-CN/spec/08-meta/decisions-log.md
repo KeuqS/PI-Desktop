@@ -49,6 +49,7 @@
 | D651 | 对话区工具调用行不再自动展开 | **修订 turn-process / thinking-display 决策中的叶子自动展开条款与 ADR `turn-process-and-thinking-display`：工具调用、托管搜索与计划卡片行在两种显示模式下都保持载荷收起，只有用户显式操作才会打开，包括最后一个活动组的字面最后一项。整体过程与普通活动组的默认展开、失败与被拒行为、逐项保留的用户选择，以及思考行自身的叶子默认都保持不变。仅渲染层改动；无 Host 协议、持久化、权限或插件契约变更。见 `04-ux/08-component-spec.md` §9.1/§9.2/§9.5/§9.6、`04-ux/09-interaction-patterns.md` §4.2 与 E2E-040。** | 自动展开最新调用的载荷会把阅读注意力从用户等待的回答上拽走，也让同一轮对话因结束方式不同而呈现不同样子；把载荷交给用户打开可保持行行为可预测。 |
 | D652 | 会话标题生成改为独立插件 | **取代 ADR 0186：移除核心的提示词回退标题和内置标题补全；新会话在用户或插件修改前保留本地化默认标题。新增高风险 `session.autoTitle` 能力，用于读取有界首轮上下文并通过比较并设置写入标题，数据由架构 v23 的 `sessions.title_source` 支撑。独立插件可在面板配置提示词模板、模型和思考级别，并使用 `session:turnEnded`、`models.list` 和 `agent.complete`。见 ADR 0323、E2E-021a 及插件 API/权限规格。** | 标题生成是可选产品策略，且支持模型与提示词配置；宿主需要狭窄、持久的边界来保证手动标题在竞态中胜出。 |
 | D653 | 输入框提示词增强改为可选插件 | **取代 ADR 0121：移除宿主内置提示词增强界面、设置、直接补全 IPC 与 MCP 操作。新增受 `composer.transform` 权限约束的输入框操作贡献项和插件回调；仅传当前草稿与可选模型标识，并提供输入/输出上限、审计、文件引用恢复、单步撤销及草稿/会话过期保护。`vastsa/pi-prompt-enhancement` 保持独立仓库，必须由用户主动安装；宿主不随附或默认启用。插件首次加载时，将有效旧偏好迁移到尚未设置的插件设置并写入私有标记；旧宿主值继续保留以支持回退。见 ADR 0324、E2E-218 / E2E-259 与插件 API/权限规格。** | 提示词增强是可选行为，应由单独安装的插件拥有；宿主提供狭窄、安全的转换契约及一次性旧设置迁移路径。 |
+| D654 | Windows 发布签名 | **修订 D126 / D364 / D603 / ADR 0022 / ADR 0197：标签发布在上传前通过 SignPath 的 GitHub connector 对 Windows 工件做 Authenticode 签名。工件配置与代码一同评审，位于 `apps/desktop/build/signpath/windows-release-artifacts.xml`（根元素为 `<zip-file>`，因为 GitHub 把工作流工件存为 ZIP），覆盖 `PI-Desktop-Setup-<version>.exe`、`PI-Desktop-Portable-<version>.exe`，以及 `PI-Desktop-Portable-<version>.zip` 内的 `PI-Desktop.exe` 与 `resources/bin/pi-desktop-host-core.exe`；`version` 参数固定每个已签名文件名。该通道需要 `SIGNPATH_API_TOKEN` 以及组织、项目、策略和工件配置的 slug 作为仓库变量，缺少任一项即会在打包前失败，并校验每个返回的签名，同时用已签名字节重新生成 `latest.yml` 与安装程序 block map。`workflow_dispatch` 可用 `sign_windows: false` 产出未签名调试工件；标签构建始终签名，本地打包保持未签名。见 ADR 0325 与 E2E-196d。** | Windows 下载被报为未知发布者，SmartScreen 拦截首次运行，而签名密钥又必须留在 CI 之外。 |
 
 ## B. 辅助实现默认值
 
@@ -5340,3 +5341,21 @@ Markdown 源码，不是 `text/html` 负载；对禁用行内 HTML 的外部编�
 - `vastsa/pi-prompt-enhancement` 继续位于独立仓库，必须由用户安装，宿主不默认随附。首次加载时，有效的旧设置会迁移到插件私有设置；旧宿主值保留供回退使用。
 - 转换调用只接收草稿文本和可选模型标识；宿主检查权限与声明、限制输入输出、审计调用，并保护文件引用和过期草稿。
 - 见 ADR 0324、E2E-218 / E2E-259 与插件 API/权限规格。
+## 2026-10-08 —— 通过 SignPath 签发已签名的 Windows 发布（D654）
+
+- 标签发布现在会在发布作业上传之前，通过 SignPath 的 GitHub connector 对该标签的 Windows
+  工件做 Authenticode 签名：NSIS 安装程序、自解压便携版可执行文件，以及便携版 ZIP 内的
+  `PI-Desktop.exe` 与 `resources/bin/pi-desktop-host-core.exe`。工件配置与代码一同评审，
+  位于 `apps/desktop/build/signpath/windows-release-artifacts.xml`，其 `version` 参数把每个
+  已签名文件名固定为该通道本次构建的版本。
+- 该通道把未签名工件作为一个 GitHub 工作流工件上传，提交签名请求，用
+  `scripts/verify-windows-release-signing.ps1` 校验返回的签名，并用
+  `scripts/refresh-windows-update-feed.mjs` 重新生成 `latest.yml` 与安装程序 block map，
+  因为 electron-updater 在安装更新前会校验这两者。
+- 缺少 `SIGNPATH_API_TOKEN`，或缺少组织、项目、策略、工件配置的 slug，都会让 Windows
+  作业在打包阶段之前失败。`workflow_dispatch` 可用 `sign_windows: false` 关闭签名以产出
+  未签名调试工件；标签推送始终签名，本地打包保持未签名，因为该 connector 只能对
+  GitHub 托管工作流运行的工件签名。
+- 打包进 NSIS 安装程序的应用可执行文件仍未签名；为该副本签名需要一条
+  unpack-sign-repack 通道。见 ADR 0325、E2E-196d 与
+  `06-delivery/06-release-runbook.md` 第 4.8 节。

@@ -3898,6 +3898,16 @@ IPC 请求无法关闭。
 - **里程碑**：M6+
 - **状态**：工作流脚本/单元已覆盖；每次发布仍需在干净机器上验证（适用变更合入前需在具备条件的环境中运行 E2E）
 
+#### E2E-196d：Windows 标签工件带有有效的 Authenticode 签名
+
+- **先决条件**：推送与 `apps/desktop/package.json` 匹配的 `vX.Y.Z` 标签，或以 `sign_windows: true`（默认）手动运行 Release 工作流；GitHub Actions 已配置 `SIGNPATH_API_TOKEN` 密钥以及 SignPath 组织、项目、签名策略和工件配置变量；SignPath GitHub App 可读取该仓库。
+- **步骤**：1) 运行标签工作流。2) 确认 Windows 作业在提交签名请求之前，已把三个未签名工件作为单个工作流工件上传。3) 确认请求已完成，并且已签名文件替换了 `apps/desktop/release` 中的未签名文件。4) 在 Windows 机器上用 `Get-AuthenticodeSignature` 检查 `PI-Desktop-Setup-X.Y.Z.exe`、`PI-Desktop-Portable-X.Y.Z.exe`，以及从 `PI-Desktop-Portable-X.Y.Z.zip` 解出的两个可执行文件。5) 确认 `latest.yml` 与 `PI-Desktop-Setup-X.Y.Z.exe.blockmap` 在签名后已重新生成，且已发布更新源的 `sha512` 与已签名安装程序一致。6) 在浏览器中下载安装程序，查看 SmartScreen 报告的发布者。
+- **预期**：四个可执行文件都带有来自所配置发布者的有效 Authenticode 签名；发布以重新生成的更新源发布已签名工件，已安装的旧版本可通过 electron-updater 就地更新；缺少设置、未签名工件、来自其他证书的签名，或未做任何改变的签名请求，都会在发布任何内容之前让作业失败。
+- **关联规格**：`06-delivery/06-release-runbook.md`、`05-security/01-security.md`、ADR 0325
+- **验收**：质量、安全
+- **里程碑**：M6+
+- **状态**：工件配置、工作流接线、更新源刷新与签名校验已由单测覆盖（`windows-signing-release.test.mjs`）；已签名发布与 SmartScreen 发布者仍需运行器验证（适用变更合入前需在具备条件的环境中运行 E2E）
+
 #### E2E-212：GitHub Release 启动 CNB 镜像流水线
 
 - **前提条件**：`vastsa/PI-Desktop` 已配置仓库密钥 `CNB_MIRROR_TOKEN`；
@@ -5714,7 +5724,7 @@ eleven-tool-round desktop paths are verified by
 [决策日志 §D](/zh-CN/spec/08-meta/decisions-log) 中的法典平价决策
 而不是 A-H 标准；他们的黄金来源是捕获套件。
 
-发布工件路径由 E2E-192、E2E-192a、E2E-196a、E2E-196b、E2E-196c 和 E2E-200 覆盖
+发布工件路径由 E2E-192、E2E-192a、E2E-196a、E2E-196b、E2E-196c、E2E-196d 和 E2E-200 覆盖
 （质量，M6+）。
 
 ---

@@ -47,6 +47,7 @@ This log freezes previously open questions into concrete decisions.
 | D651 | Transcript tool rows never auto-open | **Amend the leaf auto-open provision of the turn-process / thinking-display decisions and ADR `turn-process-and-thinking-display`: a tool-call, hosted-search or plan row keeps its payload collapsed in both display modes and only an explicit user action opens it, including the literal final item of the last activity group. Whole-process and ordinary-group defaults, failed/denied behavior, retained per-item choices, and the thinking row's own leaf default are unchanged. Renderer-only; no host protocol, persistence, permission or plugin contract change. See `04-ux/08-component-spec.md` §9.1/§9.2/§9.5/§9.6, `04-ux/09-interaction-patterns.md` §4.2, and E2E-040.** | A payload that opened itself under the newest call pulled attention away from the answer the user was waiting for and made one turn look different depending on how it ended; leaving every payload to the user keeps one predictable row. |
 | D652 | Make session title generation a standalone plugin | **Supersede ADR 0186: remove core prompt-derived fallback and built-in title completion; new sessions keep their localized default title until a user or plugin changes it. Add the high-risk `session.autoTitle` capability for bounded first-turn context and compare-and-set title updates, backed by schema v23 `sessions.title_source`; manual rename marks `manual`, plugin output marks `generated`. The standalone plugin configures its prompt template, model, and thinking level through its panel and uses `session:turnEnded`, `models.list`, and `agent.complete`. See ADR 0323, E2E-021a, and the plugin API/permission specs.** | Title generation is optional product policy with model and prompt settings, and the host needs a narrow durable boundary that makes manual titles win races. |
 | D653 | Make Composer prompt enhancement an optional plugin | **Supersede ADR 0121: remove host-owned prompt-enhancement UI, settings, direct completion IPC, and MCP action. Add the permission-gated `composer.transform` contribution and plugin callback, passing only the current draft plus an optional model key, with bounded input/output, audit, file-reference restoration, one-step undo, and stale session/draft guards. Keep `vastsa/pi-prompt-enhancement` in its own repository and require explicit user installation; do not bundle or enable it by default. On first plugin load, copy valid legacy preferences into unset plugin settings and write a private migration marker; preserve old host values for rollback. See ADR 0324, E2E-218 / E2E-259, and the plugin API/permission specs.** | Prompt enhancement is optional behavior that belongs to a separately installed plugin, while the host needs a narrow safe transform contract and a one-time path for existing settings. |
+| D654 | Windows release signing | **Amend D126 / D364 / D603 / ADR 0022 / ADR 0197: tag releases Authenticode-sign the Windows artifacts through SignPath's GitHub connector before upload. The artifact configuration is reviewed with the code at `apps/desktop/build/signpath/windows-release-artifacts.xml` (root `<zip-file>`, because GitHub stores a workflow artifact as a ZIP) and covers `PI-Desktop-Setup-<version>.exe`, `PI-Desktop-Portable-<version>.exe`, and `PI-Desktop.exe` plus `resources/bin/pi-desktop-host-core.exe` inside `PI-Desktop-Portable-<version>.zip`; a `version` parameter pins every signed name. The lane requires `SIGNPATH_API_TOKEN` plus the organization, project, policy, and artifact-configuration slugs as repository variables, fails before packaging when one is missing, verifies every returned signature, and regenerates `latest.yml` and the installer block map from the signed bytes. `workflow_dispatch` may set `sign_windows: false` for unsigned debug artifacts; tag builds always sign, and local packaging stays unsigned. See ADR 0325 and E2E-196d.** | Windows downloads reported an unknown publisher and SmartScreen blocked the first run, while the signing key has to stay outside CI. |
 
 ## B. Secondary implementation defaults
 
@@ -7577,3 +7578,26 @@ must keep splitting are covered by `markdown-blocks.test.mjs`.
   leaf-ownership helper is retired. See `04-ux/08-component-spec.md`
   §9.1/§9.2/§9.5, `04-ux/09-interaction-patterns.md` §4.2, ADR
   `turn-process-and-thinking-display`, and E2E-040.
+
+## 2026-10-08 — Signed Windows releases through SignPath (D654)
+
+- Tag releases now Authenticode-sign the Windows artifacts of that tag through
+  SignPath's GitHub connector before the publish job uploads them: the NSIS
+  installer, the self-extracting portable executable, and `PI-Desktop.exe` plus
+  `resources/bin/pi-desktop-host-core.exe` inside the portable ZIP. The artifact
+  configuration is reviewed with the code in
+  `apps/desktop/build/signpath/windows-release-artifacts.xml`, and its `version`
+  parameter pins every signed name to the version this lane built.
+- The lane uploads the unsigned artifacts as one GitHub workflow artifact,
+  submits the signing request, verifies the returned signatures with
+  `scripts/verify-windows-release-signing.ps1`, and regenerates `latest.yml`
+  plus the installer block map with `scripts/refresh-windows-update-feed.mjs`,
+  because electron-updater verifies both before it installs an update.
+- A missing `SIGNPATH_API_TOKEN`, or a missing organization, project, policy, or
+  artifact-configuration slug, fails the Windows job before the packaging phase.
+  `workflow_dispatch` can disable signing with `sign_windows: false` for unsigned
+  debug artifacts; a tag push always signs, and local packaging stays unsigned
+  because the connector signs artifacts of a GitHub-hosted workflow run only.
+- The application executable packed inside the NSIS installer stays unsigned;
+  signing that copy needs an unpack-sign-repack lane. See ADR 0325, E2E-196d,
+  and `06-delivery/06-release-runbook.md` section 4.8.

@@ -5,7 +5,7 @@
 
 > 范围：macOS arm64、Intel x64、Windows x64 和 Linux x64 及 arm64 的 D126/D285/D603 标记工件，
 > 包括 Linux 系统 Electron ASAR 资产；
-> macOS signing/notarization 保留下面的详细资格通道。
+> macOS signing/notarization 与 Windows SignPath signing 是下面的详细资格通道。
 > 交叉引用：[里程碑](/zh-CN/spec/06-delivery/01-mvp-milestones) · [进程模型](/zh-CN/spec/03-runtime/07-process-model) · [安全性](/zh-CN/spec/05-security/01-security)
 
 ## 1. 构建通道
@@ -50,6 +50,7 @@ Windows 可执行文件和原生窗口图标中使用 `build/icon.ico`。渲染�
    - `APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID` — 公证所必需（`APPLE_TEAM_ID` 必须为 `DUV63RKYTW`）
 3. 安装 Rust 工具链和 pnpm 工作区。Rust 必须在 macOS 本机运行器上运行：
    Apple Silicon 使用 arm64，Intel 使用 x86_64。
+4. 一个 SignPath 组织，链接 **GitHub.com** 可信构建系统、一个项目、一条签名策略、来自 `apps/desktop/build/signpath/windows-release-artifacts.xml` 的工件配置，以及具有 submitter 权限的 API token。涉及的 Actions secrets 与 variables 见 4.8 节。
 
 ## 3. 构建内容
 
@@ -325,6 +326,77 @@ override 作用于它。它的 `signApplication()` 对每个文件 `await` 一�
 并行路径，也没有任何选项或环境变量可以开启并发。因此更快的签名器只能通过 `mac.sign`
 替换钩子实现，那是重写而不是配置开关；所以该通道继续使用锁定的签名器并保留上述诊断。
 
+### 4.8 Windows 代码签名（SignPath）
+
+Windows 标签工件在上传前会做 Authenticode 签名（D654 / ADR 0325）。
+签名走 SignPath 的 GitHub connector，它只能对 GitHub 托管工作流产出的工件签名：
+它会校验构建来源、应用工件配置，并返回已签名的文件。本工作流的每个作业都运行在
+GitHub 托管的 runner 上，这正是该 connector 的要求。
+
+SignPath 配置（每个组织一次，在首次已签名发布之前）：
+
+1. 在 SignPath 组织中加入预定义的 **GitHub.com** 可信构建系统，并将其链接到 PI-Desktop 项目。connector 绑定在它之上，且签名策略要求可信构建系统校验，因此没有它的请求会被拒。OSS 订阅下即使全局管理员访问 *Add predefined* 页面也会返回 403，所以组织里若还没有列出 GitHub.com，需要向 SignPath support 申请开通。
+2. 为仓库安装 [SignPath GitHub App](https://github.com/apps/signpath)，以便 connector 能读取构建元数据与审计日志记录。
+3. 创建项目（`PI-Desktop`）、其签名策略（`release-signing`），以及名为
+   `windows-release-artifacts`、内容为
+   `apps/desktop/build/signpath/windows-release-artifacts.xml` 的工件配置，通过
+   **Project → Artifact Configurations → Add → Custom** 粘贴。请原样粘贴，使 SignPath
+   实际应用的副本与仓库中已评审的副本保持一致。
+4. 确认签名策略不是 `INVALID`。证书仍处于 `CSR PENDING` 的策略无法签名，在其状态无效期间
+   所有签名请求都会失败；工作流无法绕过这一点。
+5. 为该签名策略列为 submitter 的 **CI user** 创建 API token（本组织提供 CI user
+   `CI builds`）。即使交互式用户是组织管理员，其 token 也会被拒绝。
+
+工件配置的根元素是 `<zip-file>`，因为 `actions/upload-artifact` 会把工作流工件存为 ZIP 归档；
+它下面的每个元素因此都指向该归档根目录下的一个文件：
+
+| 工件 | 已签名内容 |
+|---|---|
+| `PI-Desktop-Setup-<version>.exe` | NSIS 安装程序，同时也是应用内更新包 |
+| `PI-Desktop-Portable-<version>.exe` | 为单可执行文件环境保留的自解压便携版可执行文件 |
+| `PI-Desktop-Portable-<version>.zip` | 归档内的 `PI-Desktop.exe` 与 `resources/bin/pi-desktop-host-core.exe` |
+
+该通道由 `sign_windows` 控制：每次标签推送都开启，`workflow_dispatch` 可以用
+`sign_windows: false` 将其关闭以产出未签名调试工件（这类运行永远不会进入发布作业）。其步骤如下：
+
+| 步骤 | 作用 |
+|---|---|
+| 要求 Windows 签名配置 | 缺少下列任一设置时在打包前失败 |
+| 解析 Windows 发布版本 | 从 `apps/desktop/package.json` 读取工件配置的 `version` 参数 |
+| 上传待签名的 Windows 工件 | 把三个未签名工件作为单个名为 `windows-unsigned-<run id>-<run attempt>` 的 GitHub 工件上传；它会留在该次运行中，作为提交内容的记录 |
+| 提交 SignPath 签名请求 | 对该工件签名，并把已签名文件解压回 `apps/desktop/release`；最长等待 30 分钟 |
+| 校验已签名的 Windows 工件 | `scripts/verify-windows-release-signing.ps1` 要求全部四个可执行文件都具有有效签名 |
+| 刷新 Windows 更新源 | `scripts/refresh-windows-update-feed.mjs` 按已签名的字节重写 `latest.yml` 与安装程序的 block map |
+
+这些设置位于 GitHub → 仓库 `vastsa/PI-Desktop` → Settings →
+Secrets and variables → Actions：
+
+| 设置 | 类型 | 取值 |
+|---|---|---|
+| `SIGNPATH_API_TOKEN` | Secret | 签名策略列为 submitter 的 CI user 的 API token |
+| `SIGNPATH_ORGANIZATION_ID` | Variable | SignPath 组织 ID |
+| `SIGNPATH_PROJECT_SLUG` | Variable | SignPath 项目 slug，`PI-Desktop`：slug 区分大小写 |
+| `SIGNPATH_SIGNING_POLICY_SLUG` | Variable | SignPath 签名策略 slug，例如 `release-signing` |
+| `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` | Variable | 第 3 步上传的工件配置的 slug |
+| `SIGNPATH_EXPECTED_PUBLISHER` | Variable, optional | 每个签名都必须携带的证书通用名；默认为 `SignPath Foundation` |
+
+
+有两条 SignPath 侧规则会影响工件配置与该通道：
+
+- 订阅会强制加入自己的签名水印，因此工件配置中的
+  `<authenticode-sign>` 不带 `description` 或 `description-url` 属性；试图覆盖水印的配置会被 SignPath 拒绝。
+- 试运行可以使用测试证书与 `test-signing` 策略。在发布证书签发之前 `test-signing` 一直有效，
+  且它本身不要求可信构建系统校验，但 connector 仍需要项目上已链接 GitHub.com，因此在 SignPath
+  开通之前，首次试运行预计会在提交步骤失败。测试证书以 `Test certificate for 'PI-Desktop [OSS]'`
+  签名，因此需要把 `SIGNPATH_EXPECTED_PUBLISHER` 设为该通用名，运行才能通过签名校验。
+出现以下情况时该通道会停止而不是发布：
+
+- 签名改变了安装程序，使 `latest.yml` 的 `sha512` 与
+  `PI-Desktop-Setup-<version>.exe.blockmap` 描述的字节已不复存在。
+  electron-updater 会在启动更新安装程序之前校验源的 `sha512`，并依据 block map 重建差分下载，
+  因此两者都要用已签名文件刷新。刷新后摘要没有变化也会失败，因为那意味着该请求并未替换工件。
+- 签名校验发现未签名工件、来自其他证书的签名、缺失工件，或便携版 ZIP 丢失了其中一个已签名的可执行文件。
+
 ## 5. 验证门
 
 未签名调试产物（`workflow_dispatch` 且 `sign_macos: false`）不视为通过 Gatekeeper。标签发布必须通过以下签名、公证和装订检查，否则工作流失败。
@@ -493,8 +565,7 @@ Windows 的 `dist:win` 命令会运行 `scripts/build-desktop-release.mjs`，分
 
 macOS 软件包包括按本机架构构建的 `bin/pi-desktop-host-core`；
 Linux 软件包在其本机 x64 与 arm64 运行器上做同样的事；Windows
-软件包包括 `bin/pi-desktop-host-core.exe`。签名、回滚和安装程序升级资质仍保持发布
-硬化工作；发布本身已在 D126/D285/D603 下启用。
+软件包包括 `bin/pi-desktop-host-core.exe`。macOS 签名与公证（D450 / ADR 0289）以及 Windows SignPath 签名（D654 / ADR 0325）在上传前运行；回滚、分阶段部署和安装程序升级资质仍是发布硬化工作；发布本身已在 D126/D285/D603 下启用。
 
 Native-runner 输出矩阵：
 
@@ -548,3 +619,5 @@ electron PI-Desktop-<version>-linux-<arch>.asar
   arm64。语音转写（`transcribe-cpp` 随附 `linux-arm64-cpu-vulkan` 包）以及
   其余所有功能在任何 arm64 Linux 设备上都可用。
 - 回滚、分阶段部署和预发布渠道政策仍是开放的发布工作。现有未签名 macOS 安装可能需要先手动安装一次已签名 DMG，之后应用内更新才能成功。
+- Authenticode 签名覆盖 Windows 安装程序，但不覆盖 NSIS 安装程序内打包的载荷。electron-builder 在签名请求运行之前就把 `PI-Desktop.exe` 打进安装程序，因此安装后的应用可执行文件仍未签名；便携版 ZIP 内的副本是已签名的，因为工件配置会在该归档内对它们签名。为打包后的应用签名需要一条 unpack-sign-repack 通道。
+- SignPath GitHub connector 只能对 GitHub 托管工作流运行的工件签名，因此任何本地或离线打包运行都无法产出已签名的 Windows 安装程序。

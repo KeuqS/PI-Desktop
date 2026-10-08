@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for the Windows release lane (ADR 0325).
+
+  GitHub's upload-artifact action stores every workflow artifact as a ZIP
+  archive. The SignPath GitHub connector therefore requires the root element of
+  an artifact configuration used with this integration to be <zip-file>, and
+  every element below it names a file at the root of that archive. The two
+  portable names are paths inside that ZIP, not inside the PI-Desktop zip.
+
+  Install it once per SignPath project:
+    Project -> Artifact Configurations -> Add -> Custom, then paste this file.
+    Keep the slug in the SIGNPATH_ARTIFACT_CONFIGURATION_SLUG repository
+    variable; see docs/spec/06-delivery/06-release-runbook.md section 4.8.
+
+  The `version` parameter is supplied by the release workflow from
+  apps/desktop/package.json, so a signing request can only ever cover the
+  artifacts of the version this lane just built.
+  The subscription enforces its own signature watermark, so `authenticode-sign`
+  carries no `description` or `description-url`: SignPath rejects an artifact
+  configuration that tries to override it.
+
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://signpath.io/artifact-configuration/v1 https://app.signpath.io/Web/artifact-configuration/v1.xsd">
+  <parameters>
+    <parameter name="version" description="PI-Desktop release version (apps/desktop/package.json)" />
+  </parameters>
+
+  <!-- The workflow artifact is a ZIP, so the root artifact is a ZIP as well. -->
+  <zip-file>
+    <!-- The two executables users download. The NSIS installer carries the app
+         payload and stays the in-app update package; the self-extracting
+         portable executable is kept for company environments that whitelist a
+         single executable. Several peers of one type are listed as a file set
+         and signed by one directive. -->
+    <pe-file-set>
+      <include path="PI-Desktop-Setup-${version}.exe" />
+      <include path="PI-Desktop-Portable-${version}.exe" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+
+    <!-- The portable ZIP distribution is extracted by the user, who then runs
+         PI-Desktop.exe directly, so both first-party executables inside the
+         archive are signed as well. Electron's own DLLs stay untouched: they
+         are covered by the installer signature and are not ours to re-sign. -->
+    <zip-file path="PI-Desktop-Portable-${version}.zip">
+      <pe-file-set>
+        <include path="PI-Desktop.exe" />
+        <include path="resources/bin/pi-desktop-host-core.exe" />
+        <for-each>
+          <authenticode-sign />
+        </for-each>
+      </pe-file-set>
+    </zip-file>
+  </zip-file>
+</artifact-configuration>
