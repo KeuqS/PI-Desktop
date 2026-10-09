@@ -13,6 +13,8 @@ export const enEntries: ChangelogEntry[] = [
       "Open local Markdown links from chat in the bundled File Manager, including relative links and line references.",
       "Show configured context-window limits in the Composer's model list.",
       "Plugins can inspect or refuse network redirects; existing fetch calls still follow redirects by default.",
+      "Plugin permission risk labels now match the published permission matrix.",
+      "Windows marketplace downloads continue when certificate revocation servers are offline, with certificate checks still enforced.",
     ],
   },
   {

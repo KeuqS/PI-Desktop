@@ -13,6 +13,8 @@ export const ptBREntries: ChangelogEntry[] = [
       "Abra links locais para arquivos Markdown pelo chat no Gerenciador de arquivos integrado, incluindo links relativos e referências a linhas.",
       "A lista de modelos do Composer agora mostra os limites de contexto configurados.",
       "Plugins podem inspecionar ou recusar redirecionamentos de rede; chamadas fetch existentes continuam seguindo redirecionamentos por padrão.",
+      "Os níveis de risco das permissões dos plugins agora correspondem à matriz de permissões publicada.",
+      "Os downloads do marketplace de plugins no Windows continuam mesmo quando os servidores de revogação de certificados estão indisponíveis, mantendo a verificação dos certificados.",
     ],
   },
   {

@@ -103,7 +103,7 @@ Windows 可执行文件和原生窗口图标中使用 `build/icon.ico`。渲染�
 阻塞步骤：
 
 1. 打标签**之前**刷新 `apps/desktop/resources/models.dev/api.json`。
-   `scripts/release.mjs` 默认对每次升版本都会刷新，包括预发布。无变化的刷新
+   `scripts/release.mjs` 不负责下载或刷新该目录；稳定版与预发布均须显式刷新。无变化的刷新
    （已经是最新）仍然算通过：被打标签的树里的快照才是产物会带上的内容。
    不要把单行压缩 JSON 的 diff 当成“文件不存在”。
 2. 在 `node scripts/release.mjs <version>` / `git tag` **之前**编辑
@@ -134,7 +134,7 @@ Windows 可执行文件和原生窗口图标中使用 `build/icon.ico`。渲染�
    （`pnpm check:release-docs x.y.z`），这样即使 `scripts/release.mjs` 对
    `x.y.z-beta.*` / `x.y.z-rc.*` 跳过该预检，更新日志和 README 仍会对齐。
    预检会在临时目录编译 TypeScript 更新日志，因此不要求先构建整个工作区。
-   `scripts/release.mjs` 仍会为预发布刷新 models.dev；`--skip-docs-check`
+   预发布也须显式刷新 models.dev；`--skip-docs-check`
    仅用于明确的非发布性升版本。
 7. 提交文档更新，使被打标签的提交同时包含该版本的说明与准确的版本描述
    （单独提交或与升版本提交相邻）。

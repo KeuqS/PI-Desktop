@@ -13,6 +13,8 @@ export const frEntries: ChangelogEntry[] = [
       "Ouvrez depuis le chat les liens locaux vers des fichiers Markdown dans le gestionnaire intégré, y compris les liens relatifs et les références de ligne.",
       "La liste des modèles du Composer affiche maintenant les limites de contexte configurées.",
       "Les plugins peuvent inspecter ou refuser les redirections réseau ; les appels fetch existants continuent de les suivre par défaut.",
+      "Les niveaux de risque des autorisations des plugins correspondent désormais à la matrice publiée.",
+      "Les téléchargements du marketplace sous Windows continuent lorsque les serveurs de révocation sont indisponibles, tout en conservant la vérification des certificats.",
     ],
   },
   {
